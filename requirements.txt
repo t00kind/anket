@@ -1,0 +1,7 @@
+# asyncpg
+ruff
+# pandas
+openpyxl
+aiogram
+APScheduler
+python-decouple
