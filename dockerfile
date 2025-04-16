@@ -1,18 +1,18 @@
-# Используем минимальный образ Python
+# Use the minimal Python image
 FROM python:3.12-slim
 
-# Устанавливаем рабочую директорию
+# Set the working directory
 WORKDIR /app
 
-# Копируем зависимости
+# Copy dependencies
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Копируем все остальные файлы
+# Copy all other files
 COPY . .
 
-# Указываем переменные среды (рекомендуется задавать через .env или docker-compose)
+# Set environment variables (it's recommended to specify them via .env or docker-compose)
 ENV PYTHONUNBUFFERED=1
 
-# Запуск скрипта
+# Run the script
 CMD ["python", "main.py"]

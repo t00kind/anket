@@ -1,121 +1,131 @@
-"""
-Telegram bot using aiogram 3.x to conduct polls and save results to an Excel file.
-
-Functionality:
-1. /start command — sends a welcome message and prints the chat ID (useful for setting GROUP_CHAT_ID).
-2. /start_poll command — sends a non-anonymous poll to the specified group.
-3. Poll answer handler — saves user_id, username, selected option, and timestamp to an Excel file.
-4. /get_results command — sends the Excel file with poll results to the user.
-5. All data is stored in-memory (Excel file inside BytesIO).
-
-Requirements:
-- Set TG_TOKEN and GROUP_CHAT_ID in the .env file.
-- Install dependencies: aiogram, openpyxl, python-decouple.
-"""
-"""
-
-1. Запускаем бота и отправляем команду /start:
-   - Бот отвечает: "Привет! Chat ID: <ваш chat_id>".
-   
-2. Запускаем команду /start_poll для создания опроса:
-   - Бот отправляет опрос в группу с вопросом "Какой язык программирования тебе ближе?" и вариантами ответа (Python, JavaScript, Rust, Go, Другое).
-   - Бот подтверждает, что опрос отправлен в группу.
-
-3. Участники группы отвечают на опрос:
-   - Бот сохраняет их ответы и логирует выбор каждого пользователя с их username и временем.
-
-4. Для получения результатов опроса отправляем команду /get_results:
-   - Бот отправляет Excel-файл с результатами опроса (пользователь, выбранный ответ и временная метка).
-
-Примечание: Чтобы бот корректно работал, нужно задать TG_TOKEN и GROUP_CHAT_ID в .env файле перед запуском.
-"""
-
-
-# --- Token and chat setup ---
 import logging
 import asyncio
-from aiogram import Bot, Dispatcher, types
-from aiogram.types import PollAnswer, InputFile
+from aiogram import Bot, Dispatcher, types, F
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.client.default import DefaultBotProperties
 from aiogram.filters import Command
 from decouple import config
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 from io import BytesIO
 from datetime import datetime
 
-# --- Logging configuration ---
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[logging.StreamHandler()]
-)
+"""
+Telegram-бот для проведения опросов по списку пользователей из Excel-файла и сохранения результатов в Excel.
+
+Функциональность:
+---------------
+1. Пользователь запускает бота командой /start:
+   - Бот приветствует и просит прислать Excel-файл с Telegram-username'ами (без символа @).
+
+2. Пользователь отправляет Excel-файл (.xlsx), где в первом столбце указаны username'ы:
+   - Бот загружает файл.
+   - Считывает username'ы из первой колонки таблицы, начиная со второй строки (предполагается, что первая — заголовок).
+   - По каждому username отправляется личное сообщение с опросом.
+   - Опрос — неанонимный, с вопросом "Какой язык программирования тебе ближе?" и вариантами ответа.
+
+3. Пользователь, получивший опрос, выбирает один или несколько вариантов:
+   - Бот ловит событие ответа на опрос.
+   - Сохраняет username (или user_id), выбранный вариант и временную метку в Excel-файл в памяти (BytesIO).
+
+4. Пользователь отправляет команду /get_results:
+   - Бот генерирует Excel-файл с результатами.
+   - Отправляет Excel-файл в чат.
+
+Архитектура:
+-----------
+- Aiogram 3.x используется как асинхронный фреймворк для Telegram-бота.
+- Все результаты хранятся в оперативной памяти в формате Excel с помощью библиотеки openpyxl.
+- Переменные TG_TOKEN (токен бота) и другие данные берутся из файла .env через python-decouple.
+- Для сопоставления ответов с пользователями используется маппинг poll_id → username.
+
+Ограничения:
+-----------
+- Бот работает только с .xlsx-файлами (не .csv).
+- Telegram username'ы должны быть публичны и существовать, иначе бот не сможет отправить сообщение.
+- Ответы хранятся до перезапуска бота (данные не сохраняются в файл или базу данных автоматически).
+"""
+
+
+# Logging
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# --- Configuration ---
+# Config
 TOKEN = config("TG_TOKEN")
-GROUP_CHAT_ID = config("GROUP_CHAT_ID", cast=int)
-
 bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher(storage=MemoryStorage())
 
-# --- Poll content ---
-QUESTION = "Which programming language do you prefer?"
-OPTIONS = ["Python", "JavaScript", "Rust", "Go", "Other"]
-
-# --- Excel setup ---
-workbook = Workbook()
-sheet = workbook.active
-sheet.title = "Poll Results"
-sheet.append(["User ID", "Username", "Answer", "Timestamp"])
+# Excel results setup
+result_wb = Workbook()
+result_ws = result_wb.active
+result_ws.title = "Poll Results"
+result_ws.append(["Username", "Answer", "Timestamp"])
 excel_stream = BytesIO()
 
-
-@dp.message(Command("start_poll"))
-async def start_poll(message: types.Message):
-    logger.info("Received /start_poll command")
-    await bot.send_poll(
-        chat_id=GROUP_CHAT_ID,
-        question=QUESTION,
-        options=OPTIONS,
-        is_anonymous=False
-    )
-    await message.reply("Poll has been sent to the group.")
-    logger.info(f"Poll started by user {message.from_user.id} ({message.from_user.username})")
-
-
-@dp.poll_answer()
-async def handle_poll_answer(poll: PollAnswer):
-    user_id = poll.user.id
-    username = poll.user.username or "Unknown"
-    answers = [OPTIONS[i] for i in poll.option_ids]
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-    for answer in answers:
-        sheet.append([user_id, username, answer, timestamp])
-        logger.info(f"Answer received: {username} chose '{answer}' at {timestamp}")
-
+# Poll setup
+QUESTION = "Which programming language do you prefer?"
+OPTIONS = ["Python", "JavaScript", "Rust", "Go", "Other"]
+poll_id_to_user = {}
 
 @dp.message(Command("start"))
 async def start_cmd(message: types.Message):
-    await message.reply(f"Hello! Chat ID: {message.chat.id}")
-    logger.info(f"/start command from {message.from_user.username} (Chat ID: {message.chat.id})")
+    await message.reply("👋 Hello! Send me an Excel file (.xlsx) with Telegram usernames.")
+    logger.info(f"/start from {message.from_user.id} ({message.from_user.username})")
 
+@dp.message(F.document)
+async def handle_excel_file(message: types.Message):
+    doc = message.document
+    if not doc.file_name.endswith(".xlsx"):
+        await message.reply("❌ Please send a valid .xlsx file.")
+        return
+
+    file = await bot.download(doc)
+    wb = load_workbook(file)
+    ws = wb.active
+
+    usernames = []
+    for row in ws.iter_rows(min_row=2, values_only=True):
+        username = row[0]
+        if username:
+            usernames.append(username.strip().lstrip("@"))
+
+    await message.reply(f"📤 Sending poll to {len(usernames)} users...")
+
+    for username in usernames:
+        try:
+            user = await bot.get_chat(username)
+            sent_poll = await bot.send_poll(
+                chat_id=user.id,
+                question=QUESTION,
+                options=OPTIONS,
+                is_anonymous=False
+            )
+            poll_id_to_user[sent_poll.poll.id] = username
+            logger.info(f"Poll sent to {username}")
+        except Exception as e:
+            logger.warning(f"Failed to send poll to @{username}: {e}")
+
+@dp.poll_answer()
+async def handle_poll_answer(poll: types.PollAnswer):
+    username = poll_id_to_user.get(poll.poll_id, "Unknown")
+    answer = OPTIONS[poll.option_ids[0]] if poll.option_ids else "No answer"
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    result_ws.append([username, answer, timestamp])
+    logger.info(f"{username} answered '{answer}'")
 
 @dp.message(Command("get_results"))
 async def get_results(message: types.Message):
     excel_stream.seek(0)
-    workbook.save(excel_stream)
+    result_wb.save(excel_stream)
     excel_stream.seek(0)
 
     await bot.send_document(
         chat_id=message.chat.id,
-        document=InputFile(excel_stream, filename="poll_results.xlsx"),
-        caption="Poll results"
+        document=types.InputFile(excel_stream, filename="poll_results.xlsx"),
+        caption="📊 Here are the results!"
     )
-    logger.info(f"Results sent to user {message.from_user.username}")
-
 
 async def main():
     logger.info("Bot is starting...")
