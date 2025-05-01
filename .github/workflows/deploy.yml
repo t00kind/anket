@@ -1,0 +1,32 @@
+name: Deploy to Server
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Access to Server, Pull Git Changes, Rebuild and Restart Docker Compose
+        env:
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          SSHPASS: ${{ secrets.SERVER_PASSWORD }}
+          SERVER_IP: ${{ secrets.SERVER_IP }}
+        run: |
+          sshpass -e ssh -o StrictHostKeyChecking=no $SERVER_USER@$SERVER_IP bash -c "
+          echo ✅ SSH connection successful &&
+          cd /home/satoru/anketTgBot &&
+          echo ✅ Pulling from GitHub &&
+          git pull &&
+          echo ✅ Killing old bot process &&
+          pkill -f 'python' &&  # Убиваем все процессы python (если бот работает на Python)
+          echo ✅ Starting bot in the background &&
+          nohup make run > bot.log 2>&1 &  # Запускаем бота в фоне, логируем его в bot.log
+          echo ✅ Deployment completed successfully
+          "

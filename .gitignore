@@ -2,3 +2,4 @@
 env
 .ruff_cache
 venv
+bot.log

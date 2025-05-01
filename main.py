@@ -17,6 +17,7 @@ logging.basicConfig(level=logging.DEBUG)  # Изменил уровень лог
 logger = logging.getLogger(__name__)
 
 # Config
+ADMINS = config("ADMINS").split(",")
 TOKEN = config("TG_TOKEN")
 bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher(storage=MemoryStorage())
@@ -30,6 +31,10 @@ user_results = {}
 poll_id_to_user = {}
 poll_id_to_data = {}
 
+def is_admin(message: types.Message):
+    logger.debug(f"[RIGHTS]Current user: {message.from_user.username}")
+    return message.from_user.username in ADMINS
+
 @dp.startup()
 async def setup_commands(bot: Bot):
     commands = [
@@ -42,10 +47,22 @@ async def setup_commands(bot: Bot):
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
-    await message.reply("👋 Привет! Пришли Excel-файл (.xlsx) с Telegram ID пользователей ( можно узнать через этого бота: @username_to_id_bot ) в 1-м столбце, а ФИО (необязательно) — во 2-м.")
-
+    await message.reply(
+        "👋 Привет!\n\n"
+        "🔹 Этот бот позволяет проводить опросы среди пользователей Telegram.\n"
+        "📤 Пришли Excel-файл (.xlsx) с Telegram ID в первом столбце и ФИО во втором (опционально).\n"
+        "🗳 После загрузки ты сможешь отправлять:\n"
+        "  — /poll — вопрос с вариантами\n"
+        "  — /text — открытый текстовый вопрос\n"
+        "📊 Для завершения и получения результатов — /finish\n\n"
+        "👉 Telegram ID можно получить через бота @username_to_id_bot"
+    )
 @dp.message(Command("finish"))
 async def finish(message: types.Message):
+    if not is_admin(message):
+        await message.reply("❌ У вас нет прав для этой команды.")
+        return
+    
     if not user_results:
         await message.reply("❌ Ответов нет.")
         return
@@ -53,7 +70,7 @@ async def finish(message: types.Message):
     wb = Workbook()
     ws = wb.active
     ws.title = "Results"
-    ws.append(["Username", "FIO", "Question", "Answer", "Timestamp"])
+    ws.append(["ID пользователя", "Никнейм", "Вопрос", "Ответ", "Время"])
 
     # Debug: Print user_results to ensure it's populated correctly
     logger.debug(f"user_results before saving: {user_results}")
@@ -76,6 +93,10 @@ async def finish(message: types.Message):
 
 @dp.message(F.document)
 async def handle_excel(message: types.Message):
+    if not is_admin(message):
+        await message.reply("❌ У вас нет прав для этой команды.")
+        return
+    
     global user_infos
     doc = message.document
     if not doc.file_name.endswith(".xlsx"):
@@ -93,16 +114,28 @@ async def handle_excel(message: types.Message):
         if username:
             user_infos.append({"username": username, "fio": fio})
 
+    if not user_infos:
+        await message.reply("❌ Не удалось загрузить ни одного пользователя. Проверь, что столбец содержит Telegram ID.")
+        return
+
     await message.reply(f"✅ Загружено {len(user_infos)} пользователей.\n\nТеперь выбери тип вопроса:\n👉 /poll — с вариантами\n👉 /text — письменный ответ")
 
 @dp.message(Command("poll"))
 async def set_poll_mode(message: types.Message):
+    if not is_admin(message):
+        await message.reply("❌ У вас нет прав для этой команды.")
+        return
+    
     global current_question_type
     current_question_type = "poll"
     await message.reply("✅ Тип вопроса: <b>опрос</b>. Теперь отправь вопрос в формате:\n\nВопрос: Какой ваш любимый цвет?\nКрасный\nСиний\nЗеленый", parse_mode="HTML")
 
 @dp.message(Command("text"))
 async def set_text_mode(message: types.Message):
+    if not is_admin(message):
+        await message.reply("❌ У вас нет прав для этой команды.")
+        return
+    
     global current_question_type
     current_question_type = "text"
     await message.reply("✅ Тип вопроса: <b>текст</b>. Теперь отправь вопрос в формате:\n\n<code>Вопрос: Ваш вопрос</code>", parse_mode="HTML")
@@ -112,10 +145,10 @@ async def handle_question(message: types.Message):
     global current_question, current_options
 
     if not user_infos:
-        await message.reply("⚠️ Сначала загрузи Excel-файл.")
+        await message.reply("⚠️ Не загружен Excel файл с пользователями для рассылки.")
         return
     if not current_question_type:
-        await message.reply("⚠️ Выбери тип вопроса: /poll или /text")
+        await message.reply("⚠️ Не выбран тип вопроса: /poll или /text")
         return
 
     # Если сообщение начинается с "Вопрос:", это значит, что ты задаешь новый вопрос
@@ -150,6 +183,8 @@ async def handle_question(message: types.Message):
 async def send_poll_question(message):
     success = 0
     fail = 0
+    failed_users = []
+
     for info in user_infos:
         username = info["username"]
         try:
@@ -165,12 +200,19 @@ async def send_poll_question(message):
             success += 1
         except Exception as e:
             logger.warning(f"Не отправлен опрос @{username}: {e}")
+            failed_users.append(username)
             fail += 1
-    await message.reply(f"✅ Отправлено: {success}\n⚠️ Ошибок: {fail}")
+
+    fail_list = "\n".join(f"@{u}" for u in failed_users) if failed_users else "нет"
+    await message.reply(
+        f"✅ Отправлено: {success}\n⚠️ Ошибок: {fail}\n\n❌ Не удалось отправить:\n{fail_list}"
+    )
 
 async def send_text_question(message):
     success = 0
     fail = 0
+    failed_users = []
+
     for info in user_infos:
         username = info["username"]
         fio = info["fio"]
@@ -187,8 +229,13 @@ async def send_text_question(message):
             success += 1
         except Exception as e:
             logger.warning(f"Не отправлен вопрос @{username}: {e}")
+            failed_users.append(username)
             fail += 1
-    await message.reply(f"✅ Отправлено: {success}\n⚠️ Ошибок: {fail}")
+
+    fail_list = "\n".join(f"@{u}" for u in failed_users) if failed_users else "нет"
+    await message.reply(
+        f"✅ Отправлено: {success}\n⚠️ Ошибок: {fail}\n\n❌ Не удалось отправить:\n{fail_list}"
+    )
 
 @dp.poll_answer()
 async def handle_poll_answer(poll: types.PollAnswer):
