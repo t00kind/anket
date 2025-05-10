@@ -6,15 +6,15 @@ from aiogram.types import FSInputFile, InlineKeyboardMarkup, InlineKeyboardButto
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.context import FSMContext
+from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.filters import Command
 from decouple import config
 from openpyxl import Workbook, load_workbook
 from datetime import datetime
-from io import BytesIO
 import os
 
-# FSM для состояний опроса и пользователя
+# FSM для состояний опроса и пользователя (т е конечная машина состояний)
 class AdminStates(StatesGroup):
     WAITING_FOR_TITLE = State()
     WAITING_FOR_QUESTIONS = State()
@@ -153,26 +153,24 @@ async def finish_preparation(message: types.Message, state: FSMContext):
         username = info["username"]
         try:
             chat = await bot.get_chat(username)
-            
-            # Создаем клавиатуру с кнопкой OK
+
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="OK, начать опрос", callback_data="start_survey")]
             ])
-            
+
             await bot.send_message(
                 chat_id=chat.id,
                 text=f"Здравствуйте, я бот-опросник. Пожалуйста, ответьте на несколько вопросов для университета по теме: <b>{survey_title}</b>.",
                 reply_markup=keyboard
             )
-            
-            # Устанавливаем пользователю состояние ожидания начала
-            user_state = dp.fsm.storage.get_state_for_user(bot.id, chat.id)
-            await dp.fsm.storage.set_state(bot.id, chat.id, UserStates.WAITING_FOR_START)
-            
-            # Инициализируем прогресс пользователя
+
+            # ✅ Получаем FSM-контекст и ставим состояние
+            user_fsm = FSMContext(storage=dp.storage, key=StorageKey(bot_id=bot.id, chat_id=chat.id, user_id=chat.id))
+            await user_fsm.set_state(UserStates.WAITING_FOR_START)
+
             user_progress[username] = 0
             success += 1
-            
+
         except Exception as e:
             logger.warning(f"Не отправлено приветствие @{username}: {e}")
             failed_users.append(username)
@@ -190,24 +188,27 @@ async def finish_preparation(message: types.Message, state: FSMContext):
     await state.clear()  # Сбрасываем состояние админа
 
 @dp.callback_query(F.data == "start_survey")
-async def on_start_survey(callback: types.CallbackQuery):
+async def on_start_survey(callback: types.CallbackQuery, state: FSMContext):
+    user_id = str(callback.from_user.id)  # ключ в user_progress
     username = callback.from_user.username
+
+    logger.debug(f"[START_SURVEY]User ID: {user_id}, username: {username}")
+    print("ALL ANSWERS:", user_progress)
     
-    if username not in user_progress:
+    if user_id not in user_progress:
         await callback.message.edit_text("К сожалению, этот опрос уже не активен.")
         return
-    
-    # Удаляем кнопку
+
     await callback.message.edit_text(callback.message.text)
-    
-    # Отправляем первый вопрос
-    await send_next_question(callback.message.chat.id, username)
-    
+
+    await state.set_state(UserStates.ANSWERING_QUESTIONS)
+
+    await send_next_question(callback.message.chat.id, user_id)  # передаём user_id
     await callback.answer()
 
-async def send_next_question(chat_id, username):
-    question_index = user_progress[username]
-    
+async def send_next_question(chat_id, user_id: str):
+    question_index = user_progress[user_id]
+
     # Проверяем, закончились ли вопросы
     if question_index >= len(prepared_questions):
         await bot.send_message(
@@ -216,32 +217,39 @@ async def send_next_question(chat_id, username):
         )
         
         # Отмечаем пользователя как завершившего опрос
-        users_completed.add(username)
+        users_completed.add(user_id)
         
         # Проверяем, все ли пользователи завершили опрос
         if len(users_completed) == users_total and admin_chat_id:
             await send_results_to_admin()
         
         return
-    
-    # Отправляем следующий вопрос
-    question_type, question, options = prepared_questions[question_index]
-    
+
+    question_type, question_text, options = prepared_questions[question_index]
+
+    # Убираем префикс "Вопрос: " если он есть
+    if question_text.startswith("Вопрос:"):
+        question_text = question_text[8:].strip()
+
     if question_type == "poll":
         poll = await bot.send_poll(
             chat_id=chat_id,
-            question=question,
+            question=question_text,
             options=options,
             is_anonymous=False
         )
-        poll_id_to_data[poll.poll.id] = (username, question_index, question, options)
-    
+        poll_id_to_data[poll.poll.id] = (user_id, question_index, question_text, options)
+
     elif question_type == "text":
-        fio = next((user["fio"] for user in user_infos if user["username"] == username), None)
+        # Ищем fio по user_id, а не по username
+        fio = next(
+            (user["fio"] for user in user_infos if str(user.get("user_id")) == user_id),
+            None
+        )
         greeting = f"{fio}, " if fio else ""
         await bot.send_message(
             chat_id=chat_id,
-            text=f"✍️ {greeting}{question}"
+            text=f"✍️ {greeting}{question_text}"
         )
 
 @dp.poll_answer()
