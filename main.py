@@ -1,5 +1,6 @@
 import logging
 import asyncio
+from config import ADMS, TKN
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.types import FSInputFile, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
@@ -28,9 +29,8 @@ logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 # Config
-ADMINS = config("ADMINS").split(",")
-TOKEN = config("TG_TOKEN")
-bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+ADMINS = ADMS
+bot = Bot(token=TKN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher(storage=MemoryStorage())
 
 # Runtime state
