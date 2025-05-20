@@ -1,7 +1,7 @@
 # --- 🐍 Local Python commands ---
 
 create-venv:
-	python3 -m venv venv
+	python3 -m venv venv && source venv/bin/activate
 
 install-deps:
 	source venv/bin/activate && pip install -r requirements.txt
@@ -10,6 +10,9 @@ setup: create-venv install-deps
 
 run:
 	python3 main.py
+
+run-pm:
+	pm2 start main.py --interpreter python3 --name anketbot
 
 run-absolute:
 	/Library/Frameworks/Python.framework/Versions/3.12/bin/python3 main.py
