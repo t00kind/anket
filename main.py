@@ -1,6 +1,5 @@
 import logging
 import asyncio
-from config import ADMS, TKN
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.types import FSInputFile, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
@@ -29,8 +28,9 @@ logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 # Config
-ADMINS = ADMS
-bot = Bot(token=TKN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+ADMINS = config("ADMS").split(",")
+TOKEN = config("TKN")
+bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher(storage=MemoryStorage())
 
 # Runtime state
@@ -150,7 +150,7 @@ async def finish_preparation(message: types.Message, state: FSMContext):
     failed_users = []
     
     for info in user_infos:
-        username = info["username"]
+        username = info["username"][:-2]
         try:
             chat = await bot.get_chat(username)
 
@@ -189,7 +189,7 @@ async def finish_preparation(message: types.Message, state: FSMContext):
 
 @dp.callback_query(F.data == "start_survey")
 async def on_start_survey(callback: types.CallbackQuery, state: FSMContext):
-    user_id = str(callback.from_user.id)  # ключ в user_progress
+    user_id = str(int(callback.from_user.id))  # ключ в user_progress
     username = callback.from_user.username
 
     logger.debug(f"[START_SURVEY]User ID: {user_id}, username: {username}")
@@ -393,7 +393,7 @@ async def send_results_to_admin():
             fio = next((user["fio"] for user in user_infos if user["username"] == username), "Unknown")
             ws.append([username, fio, question, response, timestamp])
     
-    file_path = f"/tmp/results_{survey_title.replace(' ', '_')}.xlsx"
+    file_path = f"results_{survey_title.replace(' ', '_')}.xlsx"
     wb.save(file_path)
     
     await bot.send_document(
