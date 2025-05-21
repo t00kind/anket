@@ -14,10 +14,11 @@ from openpyxl import Workbook, load_workbook
 from datetime import datetime
 import os
 
-# FSM для состояний опроса и пользователя (т е конечная машина состояний)
+# FSM для состояний опроса и пользователя
 class AdminStates(StatesGroup):
     WAITING_FOR_TITLE = State()
     WAITING_FOR_QUESTIONS = State()
+    ADDING_ADMIN = State()  # Новое состояние для добавления админов
 
 class UserStates(StatesGroup):
     WAITING_FOR_START = State()
@@ -28,25 +29,57 @@ logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 # Config
-ADMINS = config("ADMS").split(",")
+ADMINS = config("ADMS", default="").split(",")
+ADMIN_PASSWORD = "alga"  # Пароль для добавления админов
 TOKEN = config("TKN")
 bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher(storage=MemoryStorage())
 
 # Runtime state
-user_infos = []  # список словарей: [{username: ..., fio: ...}]
-survey_title = ""  # Название опроса
-prepared_questions = []  # Список подготовленных вопросов: [(тип, вопрос, опции)]
-user_progress = {}  # Прогресс пользователя: {username: current_question_index}
-user_results = {}  # Результаты: {username: [(вопрос, ответ, время)]}
-poll_id_to_data = {}  # Данные опроса: {poll_id: (username, question_index, question, options)}
-admin_chat_id = None  # ID чата админа, создавшего опрос
-users_completed = set()  # Пользователи, завершившие опрос
-users_total = 0  # Общее количество пользователей
+user_infos = []  
+survey_title = ""  
+prepared_questions = []  
+user_progress = {}  
+user_results = {}  
+poll_id_to_data = {}  
+admin_chat_id = None  
+users_completed = set()  
+users_total = 0  
 
 def is_admin(message: types.Message):
-    logger.debug(f"[RIGHTS]Current user: {message.from_user.username}")
-    return message.from_user.username in ADMINS
+    """Проверяет, является ли пользователь администратором"""
+    current_admins = config("ADMS", default="").split(",")
+    return str(message.from_user.username) in current_admins
+
+def update_admins_list(username: str):
+    """Обновляет файл .env и список ADMINS"""
+    global ADMINS
+    
+    # Читаем текущий .env
+    with open(".env", "r") as f:
+        lines = f.readlines()
+
+    # Ищем строку с ADMS
+    updated = False
+    for i, line in enumerate(lines):
+        if line.startswith("ADMS="):
+            admins = line.strip().split("=")[1].split(",")
+            if username not in admins:
+                admins.append(username)
+                lines[i] = f"ADMS={','.join(admins)}\n"
+                updated = True
+            break
+
+    # Если не нашли - добавляем новую строку
+    if not updated:
+        lines.append(f"ADMS={username}\n")
+
+    # Перезаписываем файл
+    with open(".env", "w") as f:
+        f.writelines(lines)
+    
+    # Обновляем глобальный список
+    ADMINS = admins
 
 @dp.startup()
 async def setup_commands(bot: Bot):
@@ -56,6 +89,7 @@ async def setup_commands(bot: Bot):
         types.BotCommand(command="text", description="Добавить текстовый вопрос"),
         types.BotCommand(command="finish", description="Завершить создание и начать опрос"),
         types.BotCommand(command="status", description="Проверить статус опроса"),
+        types.BotCommand(command="get_rights", description="Получить права администратора")
     ]
     await bot.set_my_commands(commands)
 
@@ -103,7 +137,37 @@ async def process_title(message: types.Message, state: FSMContext):
         "📊 Для завершения подготовки и начала опроса — /finish\n\n"
         "👉 Telegram ID можно получить через бота @username_to_id_bot"
     )
+@dp.message(Command("get_rights"))
+async def cmd_add_admin(message: types.Message, state: FSMContext):
+    """Обработчик команды добавления администратора"""
+    await state.set_state(AdminStates.ADDING_ADMIN)
+    await message.reply("🔑 Введите пароль для получения прав администратора:")
 
+@dp.message(AdminStates.ADDING_ADMIN)
+async def process_admin_password(message: types.Message, state: FSMContext):
+    """Обрабатывает введенный пароль"""
+    user_password = message.text.strip()
+    username = message.from_user.username
+
+    if not username:
+        await message.reply("❌ У вас не установлен username в Telegram!")
+        await state.clear()
+        return
+
+    if user_password == ADMIN_PASSWORD:
+        if username in ADMINS:
+            await message.reply("✅ Вы уже являетесь администратором!")
+        else:
+            try:
+                update_admins_list(username)
+                await message.reply(f"🎉 Поздравляем! @{username} теперь администратор!")
+            except Exception as e:
+                logger.error(f"Ошибка при обновлении админов: {e}")
+                await message.reply("❌ Ошибка при обновлении прав!")
+    else:
+        await message.reply("❌ Неверный пароль!")
+
+    await state.clear()
 @dp.message(Command("status"))
 async def check_status(message: types.Message):
     if not is_admin(message):
