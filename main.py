@@ -344,12 +344,12 @@ async def handle_poll_answer(poll: types.PollAnswer):
 
 @dp.message(UserStates.ANSWERING_QUESTIONS)
 async def handle_text_answer(message: types.Message, state: FSMContext):
-    username = message.from_user.username
+    user_id = str(int(message.from_user.id))
     
-    if username not in user_progress:
+    if user_id not in user_progress:
         return
     
-    question_index = user_progress[username]
+    question_index = user_progress[user_id]
     
     # Проверяем, находится ли пользователь в процессе ответа на вопросы
     if question_index < len(prepared_questions):
@@ -359,17 +359,17 @@ async def handle_text_answer(message: types.Message, state: FSMContext):
             # Сохраняем ответ на текстовый вопрос
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             
-            if username not in user_results:
-                user_results[username] = []
+            if user_id not in user_results:
+                user_results[user_id] = []
             
-            user_results[username].append((question, message.text.strip(), timestamp))
-            logger.info(f"{username} → '{message.text.strip()}' на '{question}'")
+            user_results[user_id].append((question, message.text.strip(), timestamp))
+            logger.info(f"{user_id} → '{message.text.strip()}' на '{question}'")
             
             # Увеличиваем индекс вопроса
-            user_progress[username] += 1
+            user_progress[user_id] += 1
             
             # Отправляем следующий вопрос
-            await send_next_question(message.chat.id, username)
+            await send_next_question(message.chat.id, user_id)
 
 @dp.message(F.document, AdminStates.WAITING_FOR_QUESTIONS)
 async def handle_excel(message: types.Message):
